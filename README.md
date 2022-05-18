@@ -1,1 +1,1 @@
-# NysHessian
+# SketchySGD
