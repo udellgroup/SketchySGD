@@ -1,1 +1,1 @@
-# SketchySGD
+# SketchySGD experiments
