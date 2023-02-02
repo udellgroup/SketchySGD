@@ -1,0 +1,21 @@
+{
+  "opt": "adam",
+  "data": "svhn",
+  "trials": 1,
+  "epochs": 200,
+  "act": "gelu",
+  "wd": 0.0005,
+  "bs": 128,
+  "lr_decay": 0.1,
+  "lr_decay_epoch": [
+    80,
+    120,
+    160
+  ],
+  "lr_rho_eq": false,
+  "lr_rho_prop": false,
+  "ngpu": 5,
+  "init_seed": 1234,
+  "batch_seed": 1111,
+  "dir": "run_1_gelu"
+}
