@@ -22,7 +22,9 @@ def get_lin_op(D, A, U, S, rho):
     def mv2_t(x):
         return A.T @ x
 
-    return LinearOperator((D.shape[0], U.shape[0]), matvec = lambda x: mv3(mv2(mv1(x))), rmatvec = lambda x: mv1(mv2_t(mv3(x))))
+    return LinearOperator((D.shape[0], U.shape[0]),
+                          matvec = lambda x: mv3(mv2(mv1(x.reshape(-1)))),
+                          rmatvec = lambda x: mv1(mv2_t(mv3(x.reshape(-1)))))
 
 def get_lin_op2(D, A, U, S):
     def mv(x):
