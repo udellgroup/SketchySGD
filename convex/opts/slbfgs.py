@@ -1,12 +1,27 @@
 import numpy as np
 
 class SLBFGS():
+    """Implementation of stochastic L-BFGS from "A Linearly-Convergent
+     Stochastic L-BFGS Algorithm" by Moritz et al. 2016
+    """    
     def __init__(self,
                 model,
                 eta,
                 update_freq,
                 Mem,
                 bh):
+        """Initialize SLBFGS
+
+        Args:
+            model (Logistic/LeastSquares): Object containing problem information
+            eta (float): Learning rate
+            update_freq (dict): Update frequency for snapshot and preconditioner.
+                Must contain (key, value) pairs:
+                ('snapshot', (int, 'minibatches')) and
+                ('precond', (int, 'minibatches')).
+            Mem (int): Memory size
+            bh (int): Batch size for subsampled Hessian
+        """                
         self.model = model
         self.eta = eta
         self.m = update_freq['snapshot']
@@ -23,6 +38,11 @@ class SLBFGS():
         self.u_new = np.zeros(self.model.p)
 
     def step(self, indices):
+        """Perform a single step of SLBFGS
+
+        Args:
+            indices (ndarray): Batch to use for calculating stochastic gradient
+        """        
         if self.n_iters % self.m == 0:
             self.x = self.model.w.copy()
             self.g_bar = self.model.get_grad(np.arange(self.model.ntr), self.x)
@@ -57,9 +77,15 @@ class SLBFGS():
 
         self.n_iters += 1
     
-    # L-BFGS two-loop recursion (pg. 178 of Nocedal and Wright 2nd edition)
-    # We assume the arrays are already the correct length
     def lbfgs_two_loop_recursion(self, g):
+        """L-BFGS two-loop recursion (pg. 178 of Nocedal and Wright 2nd edition)
+
+        Args:
+            g (ndarray): Vector to apply inverse Hessian approximation to
+
+        Returns:
+            ndarray: Inverse Hessian approximation times g
+        """        
         q = g
         n_dir = len(self.s_list)
         rho_vec = np.zeros(n_dir)
