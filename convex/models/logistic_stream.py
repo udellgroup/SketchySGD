@@ -1,61 +1,49 @@
 import numpy as np
 import scipy.sparse as sp
-from .glm import GLM
 
-class Logistic(GLM):
-    """Logistic regression problem. Subclass of GLM.
+class LogisticStream():
+    """Logistic regression problem in the "streaming" setting.
     """    
     def __init__(self,
-                Atr,
-                btr,
-                Atst,
-                btst,
+                data_obj,
                 mu,
                 fit_intercept = False):
-        """Initialize Logistic object
+        """Initialize LogisticStream object
 
         Args:
-            Atr (scipy sparse matrix or ndarray): Preprocessed training data.
-                If using fit_intercept, then the first column of Atr should be all ones.
-            btr (ndarray): Training labels
-            Atst (scipy sparse matrix or ndarray): Preprocessed test data
-            btst (ndarray): Test labels
+            data_obj (DataQuery): DataQuery object that contains the data for the problem
             mu (float): L2 regularization parameter
             fit_intercept (bool, optional): Designates whether we want to add a bias term. Defaults to False.
-        """        
-        super().__init__(Atr, btr, Atst, btst, mu, fit_intercept)
+        """
+        self.data_obj = data_obj
+        self.Atr = None
+        self.btr = None
+        self.ntr = data_obj.ntr
+        self.ntst = data_obj.ntst
+        self.mu = mu
+        self.fit_intercept = fit_intercept
 
+        test_data = data_obj.get_test_data(fit_intercept = fit_intercept)
+        self.Atst = test_data['Atst']
+        self.btst = test_data['btst']
+        self.p = test_data['Atst'].shape[1]
+        self.w = np.zeros(self.p)
+    
     def get_losses(self):
-        """Get the train and test losses.
+        """Get the test loss
 
         Returns:
-            dict: Dictionary containing the train and test losses
-        """   
-        if self.fit_intercept: # Don't incorporate bias into regularization
-            train_loss = 1/self.ntr * sum(np.log(1 + np.exp(-np.multiply(self.btr, self.Atr @ self.w)))) + self.mu/2 * np.linalg.norm(self.w[1:])**2
-        else:
-            train_loss = 1/self.ntr * sum(np.log(1 + np.exp(-np.multiply(self.btr, self.Atr @ self.w)))) + self.mu/2 * np.linalg.norm(self.w)**2 
-
+            dict: Dictionary containing the test loss
+        """        
         test_loss = 1/self.ntst * sum(np.log(1 + np.exp(-np.multiply(self.btst, self.Atst @ self.w))))
-        return {'train_loss': train_loss, 'test_loss': test_loss}
+        return {'test_loss': test_loss}
 
     def get_acc(self):
-        """Get the train and test accuracies. Useful for classification problems w/ least squares.
+        """Get the test accuracy.
 
         Returns:
-            dict: Dictionary containing the train and test accuracies
-        """  
-        # Train accuracy
-        y_hat = np.zeros(self.ntr)
-        prob = 1/(1 + np.exp(-self.Atr @ self.w))
-        Jplus = np.argwhere(prob >= 0.5)
-        Jminus = np.argwhere(prob < 0.5)
-        y_hat[Jplus] = 1
-        y_hat[Jminus] = -1
-        class_err = 100 * np.count_nonzero(y_hat - self.btr) / self.ntr
-        train_acc = 100 - class_err
-
-        # Test accuracy
+            dict: Dictionary containing the test accuracy
+        """
         y_hat = np.zeros(self.ntst)
         prob = 1/(1 + np.exp(-self.Atst @ self.w))
         Jplus = np.argwhere(prob >= 0.5)
@@ -64,19 +52,19 @@ class Logistic(GLM):
         y_hat[Jminus] = -1
         class_err = 100 * np.count_nonzero(y_hat - self.btst) / self.ntst
         test_acc = 100 - class_err
-
-        return {'train_acc': train_acc, 'test_acc': test_acc}
+        return {'test_acc': test_acc}
 
     def get_grad(self, indices, v = None):
         """Get the stochastic gradient of the loss function
 
         Args:
             indices (ndarray): 1d array of row indices for subsampling train data.
+                indices correspond to subsampled data in self.Atr.
             v (ndarray, optional): Location at which we should evaluate stochastic gradient. Defaults to None.
 
         Returns:
             ndarray: Stochastic gradient at v (or the current iterate if v is None) sampled at indices
-        """
+        """        
         n = indices.shape[0]
         X = self.Atr[indices,:]
         y = self.btr[indices]
@@ -96,10 +84,11 @@ class Logistic(GLM):
 
         Args:
             indices (ndarray): 1d array of row indices for subsampling train data.
+                indices correspond to subsampled data in self.Atr.
 
         Returns:
             ndarray: Updated table values for minibatch SAGA
-        """        
+        """
         y = self.btr[indices]
         XTw = self.Atr[indices,:] @ self.w
         yXTw = y * XTw
@@ -112,11 +101,12 @@ class Logistic(GLM):
 
         Args:
             indices (ndarray): 1d array of row indices for subsampling train data.
-            v (ndarray, optional): Location at which we should evaluate the Hessian diagonal. Defaults to None.
+                indices correspond to subsampled data in self.Atr.
+            v (ndarray, optional): Argument needed for consistency -- not actually used. Defaults to None.
 
         Returns:
             ndarray: Diagonal of the Hessian of the loss function (excluding the regularization term)
-        """  
+        """        
         n = indices.shape[0]
         X = self.Atr[indices,:]
 
@@ -130,13 +120,32 @@ class Logistic(GLM):
         D2 = np.array(D2)
         return D2
     
-    def get_smoothness_ub(self):
+    def get_smoothness_ub(self, batch_size):
         """Get an upper bound on the smoothness constant of the loss function
+
+        Args:
+            batch_size (int): How many samples we process at a time while computing the upper bound
 
         Returns:
             float: Upper bound on the smoothness constant of the loss function
-        """
-        if sp.issparse(self.Atr):
-            return 1/4 * 1/self.ntr * sp.linalg.norm(self.Atr, ord = 'fro')**2 + self.mu
-        else:
-            return 1/4 * 1/self.ntr * np.linalg.norm(self.Atr, ord = 'fro')**2 + self.mu
+        """        
+        batches = np.array_split(np.arange(self.ntr), int(np.ceil(self.ntr/batch_size)))
+        smoothness_ub = 0
+        for batch in batches:
+            Atr_batch = self.data_obj.get_train_data(fit_intercept = self.fit_intercept, indices = batch)['Atr']
+            if sp.issparse(Atr_batch):
+                smoothness_ub += sp.linalg.norm(Atr_batch, ord = 'fro') ** 2
+            else:
+                smoothness_ub += np.linalg.norm(Atr_batch, ord = 'fro') ** 2
+        return 1/4 * 1/self.ntr * smoothness_ub + self.mu
+
+    def update_train_data(self, indices):
+        """Update the training data in the internal state of the object
+
+        Args:
+            indices (_type_): 1d array of row indices for subsampling train data.
+                indices correspond to subsampled data in self.data_obj.
+        """        
+        train_data = self.data_obj.get_train_data(fit_intercept = self.fit_intercept, indices = indices)
+        self.Atr = train_data['Atr']
+        self.btr = train_data['btr']
