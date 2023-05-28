@@ -1,13 +1,12 @@
-# SketchySGD_ICML
+Companion code for SIMODS submission
 
-Code for ICML 2023 submission.
+To reproduce our experiments, please do the following:
 
-To run comparisons between SketchySGD and other optimizers:
-1. Run download_data.py to get datasets from libsvm
-2. Run config/logistic.sh to run logistic regression experiments + run config/least_squares.sh to run ridge regression experiments
-3. Run the jupyter notebook plot_general_results.ipynb to generate plots
+1. Download the required datasets to a new folder `data` by running `python download_data.py`. You may have to use the command `data_fixes.sh ./data` to fix some issues in the higgs and susy datasets.
+2. Remove the folders `simods_sensitivity_results`, `simods_performance_results`, `simods_streaming_results`, `simods_hessian_results`, and `simods_spectra_results`.
+3. To generate the plots in sections 5.1 and 5.2, please run `config/simods_exp_least_squares.sh` and `config/simods_exp_logistic.sh`. Once these scripts are finished running, run the notebook `plotting/simods_performance_results_plots.ipynb`.
+4. To generate the plots in section 5.3, please run `config/simods_streaming_exp_logistic.sh`. Once this script has finished running, run the notebook `plotting/simods_streaming_results_plots.ipynb`.
+5. To generate the plots in section 5.4, please run `config/simods_hessian_exp_least_squares.sh` and `config/simods_hessian_exp_logistic.sh`. Once these scripts are finished running, run `plotting/simods_hessian_results_plots.ipynb`.
+6. To generate the plots in section 5.5 and Appendix F, please run `config/simods_sensitivity_exp_least_squares.sh`, `config/simods_sensitivity_exp_logistic.sh`, and `config/simods_compute_spectra.sh`. Once these scripts are finished running, run `plotting/simods_sensitivity_results_plots.ipynb` and `plotting/simods_spectrum_results_plots.ipynb`.
 
-To run ablation experiments for SketchySGD:
-1. Run download_data.py to get datasets from libsvm
-2. Run config/ablation.sh to run ablation experiments
-3. Run the jupyter notebook plot_ablation_results.ipynb to generate plots
+Running all the experiments can take a lot of time. If you would like to generate plots based on the existing results in `simods_sensitivity_results`, `simods_performance_results`, `simods_streaming_results`, `simods_hessian_results`, and `simods_spectra_results` just run the corresponding notebooks mentioned above.
