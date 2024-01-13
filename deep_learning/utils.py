@@ -1,214 +1,76 @@
-import torch
-import torchvision.transforms as transforms
-import torchvision.datasets as datasets
-from torch.utils.data import DataLoader
 import numpy as np
-import pandas as pd
-from average_meter import AverageMeter
-from full_data import FullData
+import os
+from models.custom_dataset import CustomDataset
+from torch.optim import Adam, SGD
+from torch_optimizer import Adahessian, Yogi
+from torchmetrics.classification import MulticlassAccuracy
+from distributed_shampoo.distributed_shampoo import DistributedShampoo
+from dl_opts.sketchysgd import SketchySGD
 
-def group_product(xs, ys):
+def check_opt(opt_name):
+    if opt_name not in ['sgd', 'adam', 'adahessian', 'yogi', 'shampoo', 'sketchysgd']:
+        raise ValueError(f"Invalid optimizer name: {opt_name}")
     
-    return sum([torch.sum(x * y) for (x, y) in zip(xs, ys)])
+def _get_train_val_test(data_folder, id):
+    data_folder_id = os.path.join(data_folder, str(id)) 
+    X_train = np.load(os.path.join(data_folder_id, 'X_train.npy'))
+    X_val = np.load(os.path.join(data_folder_id, 'X_val.npy'))
+    X_test = np.load(os.path.join(data_folder_id, 'X_test.npy'))
+    y_train = np.load(os.path.join(data_folder_id, 'y_train.npy'), allow_pickle=True)
+    y_val = np.load(os.path.join(data_folder_id, 'y_val.npy'), allow_pickle=True)
+    y_test = np.load(os.path.join(data_folder_id, 'y_test.npy'), allow_pickle=True)
 
-def normalization(v):
-    # normalize a vector
-    
-    s = group_product(v, v)
-    s = s**0.5
-    s = s.cpu().item()
-    v = [vi / (s + 1e-6) for vi in v]
-    return v
+    return X_train, X_val, X_test, y_train, y_val, y_test
 
-def multi_acc(y_pred, y_test):
-    y_pred_softmax = torch.log_softmax(y_pred, dim = 1)
-    _, y_pred_tags = torch.max(y_pred_softmax, dim = 1)    
-    
-    correct_pred = (y_pred_tags == y_test).float()
-    acc = correct_pred.sum() / len(correct_pred)
-    
-    acc *= 100
-    
-    return acc
+def get_tune_dataset(data_folder, id):
+    X_train, X_val, _, y_train, y_val, _ = _get_train_val_test(data_folder, id)
 
-def make_deterministic():
-    import torch
-    import os
-    os.environ["CUBLAS_WORKSPACE_CONFIG"]= ":4096:8"
-    torch.use_deterministic_algorithms(True)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    train_dataset = CustomDataset(X_train, y_train)
+    val_dataset = CustomDataset(X_val, y_val)
 
-def dataset_loss_acc(model, criterion, data_loader, device):
-    tot_loss = AverageMeter()
-    total = 0
-    correct = 0
-    with torch.no_grad():
-        model.eval()
-        for X_batch, y_batch in data_loader:
-            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+    return train_dataset, val_dataset, X_train.shape[1], y_train
 
-            y_pred = model(X_batch)
-            y_pred_softmax = torch.log_softmax(y_pred, dim = 1)
-            _, y_pred_tags = torch.max(y_pred_softmax, dim = 1)
+def get_final_dataset(data_folder, id):
+    X_train, X_val, X_test, y_train, y_val, y_test = _get_train_val_test(data_folder, id)
 
-            total += y_batch.size(0)
-            correct += (y_pred_tags == y_batch).sum().item()
+    # Concatenate train and validation sets
+    X_train = np.concatenate((X_train, X_val))
+    y_train = np.concatenate((y_train, y_val))
 
-            loss = criterion(y_pred, y_batch)
-            tot_loss.update(loss.item(), X_batch.size(0))
+    train_dataset = CustomDataset(X_train, y_train)
+    test_dataset = CustomDataset(X_test, y_test)
 
-    return tot_loss.avg, (100 * correct/total)
+    return train_dataset, test_dataset, X_train.shape[1], y_train
 
-
-def get_data(name = "cifar10", data_dir = "../data", train_bs = 128, test_bs = 128, pin_mem = True):
-    if name == "cifar10":
-        normalize = transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-                                    std=[0.2023, 0.1994, 0.2010])
-
-        transform_train = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-        transform_test = transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-        train_set = datasets.CIFAR10(
-            root = data_dir,
-            train = True,
-            download = True,
-            transform = transform_train
-        )
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-
-        test_set = datasets.CIFAR10(
-            root = data_dir,
-            train = False,
-            download = True,
-            transform = transform_test
-        )
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
-    elif name == "svhn":
-        normalize = transforms.Normalize(mean=[0.4376821, 0.4437697, 0.47280442],
-                                    std=[0.19803012, 0.20101562, 0.19703614])
-
-        transform_train = transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-        transform_test = transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-        train_set = datasets.SVHN(
-            root = data_dir,
-            split = 'train',
-            download = True,
-            transform = transform_train
-        )
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-
-        test_set = datasets.SVHN(
-            root = data_dir,
-            split = 'test',
-            download = True,
-            transform = transform_train
-        )
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
-    elif name == "volkert":
-        X_train = pd.read_csv(data_dir+"/volkert_train.csv").to_numpy()
-        y_train = pd.read_csv(data_dir+"/volkert_train_labels.csv").to_numpy().squeeze()
-        X_test = pd.read_csv(data_dir+"/volkert_test.csv").to_numpy()
-        y_test = pd.read_csv(data_dir+"/volkert_test_labels.csv").to_numpy().squeeze()
-
-        train_set = FullData(torch.from_numpy(X_train).float(), torch.from_numpy(y_train))
-        test_set = FullData(torch.from_numpy(X_test).float(), torch.from_numpy(y_test))
-
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
-    elif name == "adult":
-        X_train = pd.read_csv(data_dir+"/a9a_train.csv").to_numpy()
-        y_train = pd.read_csv(data_dir+"/a9a_train_labels.csv").to_numpy().squeeze()
-        X_test = pd.read_csv(data_dir+"/a9a_test.csv").to_numpy()
-        y_test = pd.read_csv(data_dir+"/a9a_test_labels.csv").to_numpy().squeeze()
-
-        # Convert labels from -1, +1 to 0, 1
-        y_train = ((y_train + 1)/2).astype(int)
-        y_test = ((y_test + 1)/2).astype(int)
-
-        train_set = FullData(torch.from_numpy(X_train).float(), torch.from_numpy(y_train))
-        test_set = FullData(torch.from_numpy(X_test).float(), torch.from_numpy(y_test))
-
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
-    elif name == "miniboone":
-        X_train = pd.read_csv(data_dir+"/miniboone_train.csv").to_numpy()
-        y_train = pd.read_csv(data_dir+"/miniboone_train_labels.csv").to_numpy().squeeze()
-        X_test = pd.read_csv(data_dir+"/miniboone_test.csv").to_numpy()
-        y_test = pd.read_csv(data_dir+"/miniboone_test_labels.csv").to_numpy().squeeze()
-
-        # Normalize the data
-        X_train_mean = np.mean(X_train, axis = 0)
-        X_test_std = np.std(X_test, axis = 0)
-        X_test_mean = np.mean(X_test, axis = 0)
-        X_train_std = np.std(X_train, axis = 0)
-
-        X_train = np.divide(X_train - X_train_mean, X_train_std)
-        X_test = np.divide(X_test - X_test_mean, X_test_std)
-
-        # Convert labels from False, True to 0, 1
-        y_train = y_train.astype(int)
-        y_test = y_test.astype(int)
-
-        train_set = FullData(torch.from_numpy(X_train).float(), torch.from_numpy(y_train))
-        test_set = FullData(torch.from_numpy(X_test).float(), torch.from_numpy(y_test))
-
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
-    elif name == "higgs":
-        X_train = pd.read_csv(data_dir+"/higgs_train.csv").to_numpy()
-        y_train = pd.read_csv(data_dir+"/higgs_train_labels.csv").to_numpy().squeeze()
-        X_test = pd.read_csv(data_dir+"/higgs_test.csv").to_numpy()
-        y_test = pd.read_csv(data_dir+"/higgs_test_labels.csv").to_numpy().squeeze()
-
-        # Normalize the data
-        X_train_mean = np.mean(X_train, axis = 0)
-        X_test_std = np.std(X_test, axis = 0)
-        X_test_mean = np.mean(X_test, axis = 0)
-        X_train_std = np.std(X_train, axis = 0)
-
-        X_train = np.divide(X_train - X_train_mean, X_train_std)
-        X_test = np.divide(X_test - X_test_mean, X_test_std)
-
-        train_set = FullData(torch.from_numpy(X_train).float(), torch.from_numpy(y_train))
-        test_set = FullData(torch.from_numpy(X_test).float(), torch.from_numpy(y_test))
-
-        train_loader = DataLoader(train_set, batch_size = train_bs, shuffle = True, pin_memory = pin_mem)
-        test_loader = DataLoader(test_set, batch_size = test_bs, shuffle = False, pin_memory = pin_mem)
+def get_opt(opt_name):
+    if opt_name == 'sgd':
+        return SGD
+    elif opt_name == 'adam':
+        return Adam
+    elif opt_name == 'adahessian':
+        return Adahessian
+    elif opt_name == 'yogi':
+        return Yogi
+    elif opt_name == 'shampoo':
+        return DistributedShampoo
+    elif opt_name == 'sketchysgd':
+        return SketchySGD
     else:
-        raise RuntimeError("This dataset is not supported at this time")
+        raise ValueError(f"Invalid optimizer name: {opt_name}")
 
-    return train_loader, test_loader
+def compute_loss_acc(model, loss_fn, dataloader, num_classes, device):
+    loss = 0
+    n_samples = 0
+    accuracy = MulticlassAccuracy(num_classes, average='macro').to(device) # Balanced accuracy
 
-def get_least_used_gpus(num_ids = 1):
-    n_gpu = torch.cuda.device_count()
+    for x, y in dataloader:
+        x, y = x.to(device), y.to(device)
+        y_pred = model(x)
 
-    free_mem_array = np.zeros(n_gpu)
+        loss += loss_fn(y_pred, y).item() * y.size(0)
+        n_samples += y.size(0)
 
-    for id in range(n_gpu):
-        mem = torch.cuda.mem_get_info(torch.device("cuda:"+str(id)))
-        free_mem_array[id] = mem[0]
+        pred_labels = y_pred.argmax(dim=1)
+        accuracy.update(pred_labels, y)
 
-    sorted_ids = np.argsort(free_mem_array)
-    best_ids = sorted_ids[-num_ids:]
-
-    return best_ids
+    return loss / n_samples, accuracy.compute()
